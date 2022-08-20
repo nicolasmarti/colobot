@@ -93,6 +93,11 @@ public class Robot{
     
     point homotethy( point from, point to, float alpha ){
         float d = distance( from, to );
+        if (d == 0.0){
+            point result( from.x + 0.0, from.y + 0.0, 0 );
+            result.z = topo( result );
+            return result;            
+        }
         float dx = (to.x - from.x) / d;
         float dy = (to.y - from.y) / d;
 	
@@ -349,7 +354,7 @@ public class Robot{
 
         object self = this.self;
         
-        message( "goto_Point: " + self.position + " ==> " + to.position() );
+        //message( "goto_Point: " + self.position + " ==> " + to.position() );
 	
         PID orientation_pid( 0.05, 0.001, 0.005 );
         PID distance_pid( 0.2, 0.005, 0.003 );
@@ -413,7 +418,7 @@ public class Robot{
         if (is_adjusted_z)
             jet( 0 );
 	
-        message( "hdist = " + horizontal_distance( self.position, to.position() ) + ", vdist = " + vertical_distance( self.position, to_point ) );
+        //message( "hdist = " + horizontal_distance( self.position, to.position() ) + ", vdist = " + vertical_distance( self.position, to_point ) );
     }
 
     void goto_point( point to, float dist = 1, float delta_z = nan ){
@@ -427,10 +432,15 @@ public class Robot{
 		
             // try homemade
             point p = homotethy( to, self.position, dist );
-            if ( search_and_follow_path( p ) ) return;
-		
-            // cannot use homemade function
-            goto( to );
+            if ( search_and_follow_path( p ) ) {
+                //message( "home made path finder" );
+                return;
+            }
+            else {
+                //message( "default path finder" );
+                goto( to );
+
+            }	
         }
     }
 
@@ -481,12 +491,13 @@ public class Robot{
 	
         point path[100] = { to };    
         int path_size = recursive_reachable( self.position, to, path, max_path_size, handle );
-	
-        if ( path_size >= 0 ){
-            message( "|path| = " + path_size );
-            message( "|from, to| == " + horizontal_distance( path[ path_size ], self.position ) );
-            message( "|final, to| == " + horizontal_distance( path[ path_size ], to ) );
-        } else message( self.position + " ==> " + to + ": no path" );
+
+        if (false)
+            if ( path_size >= 0 ){
+                message( "|path| = " + path_size );
+                message( "|from, to| == " + horizontal_distance( path[ path_size ], self.position ) );
+                message( "|final, to| == " + horizontal_distance( path[ path_size ], to ) );
+            } else message( self.position + " ==> " + to + ": no path" );
 	
         // debug
         if ( path_size >= 0 ){
@@ -550,7 +561,7 @@ public class Robot{
     
     float alpha(                
                 object target
-                ){
+                                ){
 
         object self = this.self;
             
@@ -570,7 +581,7 @@ public class Robot{
     // compute the horizontal angle in-between the bot and the target
     float beta(                   
                object target
-               ){
+                                  ){
         
         object self = this.self;
         
@@ -581,7 +592,7 @@ public class Robot{
     // aiming the target
     void aim_object(                    
                     object target
-                     ){
+                                        ){
         
 	object self = this.self;
         
@@ -593,19 +604,19 @@ public class Robot{
     // returning the closest object of some type
     // filtering over some energy level [optional]
     
-    object closest_object( int category, float min_energy = nan, float max_energy = nan ){
+    object closest_object( int category, float min_energy = 0.0, float max_energy = 1.0 ){
 
         object self = this.self;
-        
+
         object[] os = radarall( category );
         float best_dist = -1;
-        object result = self;
+        object result = null;
 
         //message("|os|" + sizeof( os ) );
         for ( int i = 0; i != sizeof( os ); ++i ){
             object o = os[i];
-            if ( (min_energy == nan || o.energyLevel >= min_energy) &&
-                 (max_energy == nan || o.energyLevel <= max_energy) ){
+            if ( (o.energyLevel >= min_energy) &&
+                 (o.energyLevel <= max_energy) ){
                 float d = distance( self.position, o.position );
                 if ( best_dist < 0 || best_dist > d ){
                     best_dist = d;
@@ -616,9 +627,54 @@ public class Robot{
         }
 	
         return result;
-
+       
     }
+
+    object closest_noenergy_bot( int category, float min_energy = 0.0 ){
+
+        object self = this.self;
+        
+        object[] bots = radarall( category );
+        float best_dist = -1;
+        object result;
+	
+        for ( int i = 0; i != sizeof( bots ); ++i ){
+            object o = bots[i];
+            if ( o.energyCell == null || o.energyCell.energyLevel <= min_energy ){ 
+                float d = distance( self.position, o.position );
+                if ( best_dist < 0 || best_dist > d ){
+                    best_dist = d;
+                    result = o;
+                }
+            }
+        }
+	
+        return result;
+    }
+
     
+    object closest_full_cell(){
+
+        object self = this.self;
+        
+        object[] cells = radarall( PowerCell );
+        float best_dist = -1;
+        object result;
+	
+        for ( int i = 0; i != sizeof( cells ); ++i ){
+            object o = cells[i];
+            float d = distance( self.position, o.position );
+            if ( o.energyLevel == 1 ){
+                if ( best_dist < 0 || best_dist > d ){
+                    best_dist = d;
+                    result = o;
+                }
+            } 
+		
+        }
+        return result;
+    }
+
     ////////////
     // killing the closest type of enemy
     // with several optionality
@@ -689,69 +745,169 @@ public class Robot{
         object self = this.self;
 
         point to, from, original;
-	
+            
         original = cell.position;
         from = self.position;
 	
         // first go and grab the cell
         message("go & grab the new cell");
-        goto_object( self, cell, 2 );
-        face_object( self, cell );
+        goto_object( cell, 2 );
+        face_object( cell );
         grab();
 	
         // then we go to the target
         message("go to target");
         to = homotethy( target.position, target.orientation, -2 );
-        goto_point( self, to, 2 );
+        goto_point( to, 2 );
 	
 	
         // then if the target has no cell => drop it there and we are done
         if ( target.energyCell == null ){
 		
             message("face target and drop new cell");
-            face_point( self, to );
+            face_point( to );
             drop();
 		
         } else {
 		
             message("choose close free space for new cell & drop it");
             point new_cell = space( to, 1, 5, 4 );
-            face_point( self, new_cell );
+            face_point( new_cell );
             drop();
 		
             message("grab target old cell");
-            face_object( self, target );
+            face_object( target );
             grab();
 		
             message("choose close free space for old cell & drop it");
             point old_cell = space( to, 1, 5, 4 );
-            face_point( self, old_cell );
+            face_point( old_cell );
             drop();
 		
             message("grab back the new cell");
-            face_point( self, new_cell );
+            face_point( new_cell );
             grab();
 		
             message("place new cell in target");
-            face_object( self, target );
+            face_object( target );
             drop();
 		
             message("grab old cell");
-            face_point( self, old_cell );
+            face_point( old_cell );
             grab();
 		
             message("go place old cell");
-            goto_point( self, original, 2 );
-            face_point( self, original );
+            goto_point( original, 2 );
+            face_point( original );
             drop();
-		
-		
-        }
 	
+        }
+    }
+    //// stupid specialization for the colobot programmation goals
+    void spider_1_2(){
+		
+        killing_bot( 
+                    AlienSpider, 
+                    40,
+                    false,
+                    nan
+                     );
     }
 
-    //// the different 
+    void spider_3(){
+		
+        killing_bot( 
+                    AlienSpider, 
+                    40,
+                    true,
+                    nan
+                     );
+    }
+
+
+    void power_cell_1_2(){
+        
+        object cell = closest_full_cell();
+        object bot = closest_noenergy_bot( WingedShooter, 0.2 );
+        while ( cell != null && bot != null ){
+            
+            grab_and_change_cell( bot, cell );
+            
+            cell = closest_full_cell();
+            bot = closest_noenergy_bot( WingedShooter, 0.2 );
+	
+        }
+    
+    
+    }
+
+    void titanium_1_2(){
+		
+        point goal = radar( TitaniumOre ).position;
+        face_goto_point( goal );
+        grab();
+        goal = radar( Converter ).position;
+        face_goto_point( goal );
+        drop();
+        goal = homotethy( radar( Converter ).position, radar( Converter ).orientation, 20);
+        face_goto_point( goal );
+    }
+
+    void barage_1( ){
+    
+        killing_bot( 
+                    AlienAnt, 
+                    50,
+                    false,
+                    nan
+                     );
+    }
+    
+
+    void flying_tower_1_2(){
+    
+        killing_bot( 
+                    AlienAnt, 
+                    40,
+                    false,
+                    10
+                     );
+    }
+
+
+    void fighter_jet_1_2(){
+		
+        killing_bot( 
+                    AlienAnt, 
+                    50,
+                    true,
+                    5
+                     );
+    }
+
+    void wasp_hunter_1_2(){
+		
+        killing_bot( 
+                    AlienWasp, 
+                    50,
+                    true,
+                    0,
+                    0.4
+                     );
+    }
+    
     
 }
 
-extern void object::Main(){}
+extern void object::Main(){
+    Robot robot( this );
+
+    //robot.spider_1_2();
+    //robot.power_cell_1_2();
+    //robot.titanium_1_2();
+    //robot.spider_3();
+    //robot.barage_1();
+    //robot.flying_tower_1_2();
+    //robot.fighter_jet_1_2();
+    robot.wasp_hunter_1_2();
+}
