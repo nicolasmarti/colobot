@@ -1,0 +1,757 @@
+///////////////////////////
+// Point class
+// just an abstraction for
+// 1) static point
+// 2) dynamic object
+
+public class Point{
+	
+    point m_p;
+    object m_o;
+	
+    void Point( point p ){
+        this.m_p = p;
+        this.m_o = null;
+    }
+	
+    void Point( object o ){
+        this.m_o = o;
+    }
+	
+    point position(){
+        if (this.m_o != null)
+            return this.m_o.position;
+        else    
+            return this.m_p;
+    }
+	
+}
+
+///////////////////////////
+// PID class
+// classical controller
+
+public class PID{
+	
+    float m_P;
+    float m_I;
+    float m_D;
+    float previous_error;
+    float sum;
+	
+    void PID( float P, float I, float D )
+    {
+		
+        this.m_P = P;
+        this.m_I = I;
+        this.m_D = D;
+        this.previous_error = nan;
+        this.sum = 0.0;
+		
+    }
+	
+    float value( float error, float dt ){
+		
+        float result = 0.0;
+		
+        // P
+        result += this.m_P * error;
+		
+        // I
+        this.sum = this.sum + error * dt;
+        result += this.m_I * this.sum;
+		
+        // D
+        if ( this.previous_error != nan ){
+			
+            float derror = error - this.previous_error;
+            result += this.m_D * derror / dt;
+			
+        }
+		
+        this.previous_error = error;
+		
+        return result;
+    }
+	
+}
+///////////////////////////
+// Robot Class
+// Pot pourri for several
+// methods/functions
+
+public class Robot{
+
+    object self;
+    void Robot( object self ){
+        this.self = self;
+    }
+
+    ////////////////
+    // helper functions
+    ////////////////
+    
+    point homotethy( point from, point to, float alpha ){
+        float d = distance( from, to );
+        float dx = (to.x - from.x) / d;
+        float dy = (to.y - from.y) / d;
+	
+        point result( from.x + dx * alpha, from.y + dy * alpha, 0 );
+        result.z = topo( result );
+	
+        return result;
+    }
+    
+    point homotethy( point from, float dir, float alpha ){
+	
+        float dx = cos( dir );
+        float dy = sin( dir );
+	
+        point result( from.x + dx * alpha, from.y + dy * alpha, 0 );
+        result.z = topo( result );
+	
+        return result;
+    }
+
+    /////////////////
+    // angle from p1 to p2
+    
+    float dir( point p1, point p2 ){
+	
+        float d = distance( p1, p2 );
+        if (d == 0) return 0;
+	
+        float cos;
+        float sin;
+	
+	
+        cos = ( p2.x - p1.x ) / d;
+        sin = ( p2.y - p1.y ) / d;
+	
+        if ( cos == 0 ){
+            if ( sin > 0 ) return 90.0; else return -90.0; 
+        }
+	
+        if ( sin == 0 ){
+            if (cos > 0) return 0.0; else return 180;
+        }
+	
+        float tan = abs(sin) / abs(cos);
+	
+        float atan = atan( tan );
+	
+        if ( cos > 0 && sin < 0 ) atan = -atan;
+        if ( cos < 0 && sin < 0 ) atan = - 180 + atan;
+        if ( cos < 0 && sin > 0 ) atan = 180 - atan;
+        if ( cos > 0 && sin > 0 ) atan = atan;
+	
+        return atan;
+	
+    }
+
+    ///////////////
+
+    float horizontal_distance( object o1, object o2 ){
+        point p1( o1.position.x,
+                  o1.position.y,
+                  0.0 ); 
+        point p2( o2.position.x,
+                  o2.position.y,
+                  0.0 );
+	
+        float d = distance( p1, p2 );
+	
+        return d;
+	
+    }
+
+    float horizontal_distance( point p1, point p2 ){
+        p1.z = 0.0; 
+        p2.z = 0.0;
+	
+        float d = distance( p1, p2 );
+	
+        return d;
+	
+    }
+
+    float vertical_distance( point p1, point p2 ){
+	
+        return abs( p1.z - p2.z );
+	
+    }
+
+    // try to infer what is the maximal free distance [i.e. before hitting "something"]
+    // from center
+    // heading angle
+    float max_dist( point center, float angle, float limit = 20, float dradius = 1.0, float max_steps = 10 ){
+	
+        bool stopped = false;
+	
+        point current = center;
+	
+        float max_dist = 0.0;
+	
+        int steps = 0;
+	
+        while( !stopped && horizontal_distance( center, current ) <= limit && steps < max_steps){
+		
+            float dp = dradius;
+            float max_dp = nan;
+		
+            while( dp < limit ){
+			
+                point step = homotethy( current, angle, dp );
+                //step.z = topo( step );
+                point free = space( step, 0.1, 0.1, dp );
+                float d = horizontal_distance( free, step );
+                if (d != 0) max_dp = dp;
+                if (d == 0 && max_dp != nan) break;
+                dp += dradius;
+			
+            }
+		
+            steps += 1;
+		
+            if ( max_dp == nan ) stopped = true;
+            else {
+                max_dist += max_dp;
+                current = homotethy( current, angle, max_dp );
+            }
+		
+        }
+	
+	
+        return horizontal_distance( current, center );
+	
+    }
+
+    ///////////////
+
+    float max( float x, float y ){ if ( x > y ) return x; else return y; }
+    float min( float x, float y ){ if ( x < y ) return x; else return y; }
+
+    //////////////
+
+    // a really dummy version of path finder:
+    // from ~> to
+    // result represent the way points
+    int recursive_reachable( point from, point to, point[] result, int max_path_size, file f, int level = 0, bool debug = false ){
+	
+        if (level >= max_path_size) return -1;
+	
+        float a = dir( from, to );
+	
+        float d = horizontal_distance( from, to );
+	
+        float radius = max_dist( from, a, d );
+	
+        if ( d <= radius || d < 1 ){ 
+            result[ level ] = to;
+            if ( debug ){
+                f.writeln( "final(" + level + "):" + to );
+                f.writeln( "d:" + d + ", radius: " + radius );
+            }
+            return level;
+        }
+	
+        float max_angle = 30.0;
+        float dangle = 30.0;
+	
+        point middle; 
+        int next_level;
+	
+        if (radius > 0){
+            middle = homotethy( from, a, radius );
+            next_level = recursive_reachable( middle, to, result, max_path_size, f, level + 1, debug );
+            if ( next_level >= 0){
+                if ( debug )
+                    f.writeln( "[ a = " + 0.0 + ", radius = " + radius + " ] middle(" + level + "):" + middle );
+                //result[ level ] = middle;
+                for (int i = level; i < next_level; ++i){
+                    result[ i ] = result[ i + 1 ];
+                }
+                return next_level - 1;
+            }
+        }
+	
+        for ( float angle = dangle; abs( angle ) <= max_angle; angle += dangle ){
+		
+            // try left
+            radius = max_dist( from, a - angle, d );
+            if (radius > 0 ){
+                middle = homotethy( from, a - angle, radius );
+                next_level = recursive_reachable( middle, to, result, max_path_size, f, level + 1, debug );
+                if ( next_level >= 0){
+                    if ( debug )
+                        f.writeln( "[ a = " + -angle + ", radius = " + radius + " ] middle(" + level + "):" + middle );
+                    result[ level ] = middle;
+                    return next_level;
+                }
+            }
+		
+            radius = max_dist( from, a + angle, d );
+            if (radius > 0 ){
+                middle = homotethy( from, a + angle, radius );
+                next_level = recursive_reachable( middle, to, result, max_path_size, f, level + 1 );
+                if ( next_level >= 0 ){
+                    f.writeln( "[ a = " + angle + ", radius = " + radius + " ] middle(" + level + "):" + middle );
+                    result[ level ] = middle;
+                    return next_level;
+				
+                }
+            }
+        }
+	
+        return -1;
+    }
+
+    ///////////////////
+    // makes the bot facing a point
+    
+    void face_Point( Point to ){
+
+        object self = this.self;
+        
+        PID orientation_pid( 0.05, 0.001, 0.005 );
+        float last_time = self.lifeTime;
+	
+        while ( abs( direction( to.position() ) ) > 1.0){
+		
+            float angle = direction( to.position() );
+            float error = -angle;
+            float current_time = self.lifeTime;
+            float dt = max( current_time - last_time, 0.000001);
+            last_time = current_time;
+		
+            float a = orientation_pid.value( error, dt );
+            motor( max( -1.0, min( 1.0, a ) ), max( -1.0, min( 1.0, - a ) ) );
+		
+        }
+        motor( 0, 0 );
+    }
+
+    void face_point( point to ){
+        Point p( to );
+        face_Point( p );
+    }
+
+    void face_object( object to ){
+        Point p( to );
+        face_Point( p );
+    }
+
+    // makes the bots going to a point
+    // at least from a certain distance
+    // ( possibly with a different elevation)
+
+    void goto_Point( Point to, float dist = 1, float delta_z = nan ){
+
+        object self = this.self;
+        
+        message( "goto_Point: " + self.position + " ==> " + to.position() );
+	
+        PID orientation_pid( 0.05, 0.001, 0.005 );
+        PID distance_pid( 0.2, 0.005, 0.003 );
+        PID altitude_pid( 0.01, 0.005, 0.003 );
+	
+        float last_time = self.lifeTime;
+	
+        bool is_adjusted_z = delta_z != nan;
+	
+        point to_point = homotethy( to.position(), self.position, dist * 0.95 );
+        to_point = space( to_point, 0, 5, 1 );
+        if ( is_adjusted_z )
+            to_point.z = to.position().z + delta_z;
+	
+        // go to the point
+        while ( horizontal_distance( self.position, to.position() ) > dist ||
+                ( is_adjusted_z && vertical_distance( self.position, to_point ) > 1 )
+                ){
+            //message( "goto_Point: " + self.position + " ==> " + to_point );
+		
+            float current_time = self.lifeTime;
+            float dt = max( current_time - last_time, 0.000001);
+            last_time = current_time;
+		
+            if ( horizontal_distance( self.position, to.position() ) > dist ){
+			
+                float angle = direction( to_point );
+                float error = -angle;
+                float a = orientation_pid.value( error, dt );
+			
+                error = horizontal_distance( self.position, to_point );
+			
+                float b = max( -1.0, min( 1.0, distance_pid.value( error, dt ) ) );
+                float left_motor = max( -1.0, min( 1.0, b + a ) );
+                float right_motor = max( -1.0, min( 1.0, b - a ) );
+                motor( left_motor, right_motor );
+                //message( "motor( " + left_motor + ", " + right_motor + " )" );
+			
+            } else motor( 0, 0 );
+		
+            if ( is_adjusted_z ){
+                if ( abs(vertical_distance( self.position, to_point )) > 1 ){
+				
+                    float error = to_point.z - self.position.z;
+                    float c = altitude_pid.value( error, dt );
+                    float jet_value = max( -1.0, min( 1.0, c ) );
+                    jet( jet_value );
+				
+                } else jet( 0 );
+            }
+		
+            to_point = homotethy( to.position(), self.position, dist * 0.95 );
+            to_point = space( to_point, 0, 5, 1 );
+            if ( is_adjusted_z )
+                to_point.z = to.position().z + delta_z;
+		
+        }
+	
+        motor( 0, 0 );
+	
+        if (is_adjusted_z)
+            jet( 0 );
+	
+        message( "hdist = " + horizontal_distance( self.position, to.position() ) + ", vdist = " + vertical_distance( self.position, to_point ) );
+    }
+
+    void goto_point( point to, float dist = 1, float delta_z = nan ){
+
+        object self = this.self;
+        
+        if (delta_z != nan){
+            Point p( to );
+            goto_Point( p, dist, delta_z);
+        } else {
+		
+            // try homemade
+            point p = homotethy( to, self.position, dist );
+            if ( search_and_follow_path( p ) ) return;
+		
+            // cannot use homemade function
+            goto( to );
+        }
+    }
+
+    void goto_object( object to, float dist = 1, float delta_z = nan ){
+
+        object self = this.self;
+        
+        if (delta_z != nan){
+            Point p( to );
+            goto_Point( p, dist, delta_z);
+		
+        } else {
+		
+            // try homemade
+            point p = homotethy( to.position, self.position, dist );
+            p.z = to.position.z;
+		
+            if ( search_and_follow_path( p ) ) return;
+		
+            // cannot use homemade function
+            goto( to.position );
+        }
+    }    
+
+    // combination of face & go
+
+    void face_goto_point( point to, float dist = 1, float delta_z = nan ){
+        face_point( to );
+        goto_point( to, dist, delta_z );
+    }
+    
+    void face_goto_object( object to, float dist = 1, float delta_z = nan ){
+	face_object( to );
+	goto_object( to, dist, delta_z );
+    }
+    
+    
+    ///////////////////
+    // reusing all above: try to find a path and follow it
+    
+    bool search_and_follow_path( point to, int max_path_size = 3 ){
+
+        object self = this.self;
+        
+        file handle();
+        handle.open("path" + abstime() + ".txt", "w");
+        handle.writeln( self.position + " ==> " + to );
+	
+        point path[100] = { to };    
+        int path_size = recursive_reachable( self.position, to, path, max_path_size, handle );
+	
+        if ( path_size >= 0 ){
+            message( "|path| = " + path_size );
+            message( "|from, to| == " + horizontal_distance( path[ path_size ], self.position ) );
+            message( "|final, to| == " + horizontal_distance( path[ path_size ], to ) );
+        } else message( self.position + " ==> " + to + ": no path" );
+	
+        // debug
+        if ( path_size >= 0 ){
+		
+            point previous_point = self.position;
+            for (int i = 0; i <= path_size; ++i ){
+                point next_point = path[ i ];
+                handle.writeln( i + ": " + previous_point + " ~> " + next_point );
+                previous_point = next_point;
+            }
+        }
+        handle.close();
+	
+        if ( path_size >= 0 ){
+            for (int i = 0; i <= path_size; ++i ){
+                point next_point = path[ i ];
+                Point p( next_point );
+                face_Point( p );
+                goto_Point( p, 0.5 );
+            }
+            return true;
+        } else return false;
+    }
+
+    ///////
+    // some control for bots with elevation
+
+    void reach_altitude( float alt ){
+
+        object self = this.self; 
+        
+        alt = max( alt, topo( self.position ) );
+	
+        while ( abs( self.position.z - alt ) > 0.1 ){
+            float dz;
+            if (self.position.z > alt) dz = -0.2; else dz = 0.2;
+            jet( dz );
+        }
+        jet(0);
+	
+    }
+
+    void land(){
+        reach_altitude( 0 );
+    }
+
+    void cool_down(){
+        
+        object self = this.self;
+            
+        point safe_spot = flatspace( self.position, 0, 100, 10 );
+        if ( self.position != safe_spot)
+            goto_point( safe_spot, 0, 5);
+        land( );
+        while ( self.temperature > 0.0 ) continue;
+	
+    }
+
+    ////////////////
+    // compute the vertical angle in-between the bot and the target
+    
+    float alpha(                
+                object target
+                ){
+
+        object self = this.self;
+            
+        float h = target.position.z - self.position.z;
+        float d = horizontal_distance( self, target );
+        float alpha = atan( d / abs(h) );
+	
+        if ( h < 0 ){
+            alpha = alpha - 90;
+        } else {
+            alpha = 90 - alpha;
+        }
+	
+        return alpha;
+    }
+
+    // compute the horizontal angle in-between the bot and the target
+    float beta(                   
+               object target
+               ){
+        
+        object self = this.self;
+        
+        float beta = self.orientation - dir( self.position, target.position );
+        return beta;
+    }
+
+    // aiming the target
+    void aim_object(                    
+                    object target
+                     ){
+        
+	object self = this.self;
+        
+        aim( alpha( target ), beta( target ) );
+	
+    }
+
+    ///////////////////
+    // returning the closest object of some type
+    // filtering over some energy level [optional]
+    
+    object closest_object( int category, float min_energy = nan, float max_energy = nan ){
+
+        object self = this.self;
+        
+        object[] os = radarall( category );
+        float best_dist = -1;
+        object result = self;
+
+        //message("|os|" + sizeof( os ) );
+        for ( int i = 0; i != sizeof( os ); ++i ){
+            object o = os[i];
+            if ( (min_energy == nan || o.energyLevel >= min_energy) &&
+                 (max_energy == nan || o.energyLevel <= max_energy) ){
+                float d = distance( self.position, o.position );
+                if ( best_dist < 0 || best_dist > d ){
+                    best_dist = d;
+                    result = o;
+                }
+            }
+		
+        }
+	
+        return result;
+
+    }
+    
+    ////////////
+    // killing the closest type of enemy
+    // with several optionality
+    
+    void killing_bot( 
+                     int enemy_category, 
+                     float dist = 50,
+                     bool can_move = false,
+                     float delta_z = nan,
+                     float firing_time = 0.1
+                      ){
+
+        object self = this.self;                     
+        
+        object enemy = closest_object( enemy_category, 0.0001 );
+        while ( enemy != null ){
+		
+            if ( delta_z != nan && self.temperature > 0.8 ){
+                message("cool down");
+                cool_down( );
+            }
+		
+            float hd = horizontal_distance( self.position, enemy.position );
+            float vd = vertical_distance( self.position, enemy.position );
+		                
+            float a = alpha( enemy );
+            float b = beta( enemy );
+		
+		
+            if ( (hd <= dist + 2) && ( delta_z == nan || vd <= abs(delta_z) + 2 ) && abs( a ) <= 20 ){
+			
+                if ( abs( b ) >= 10 ){
+                    face_object( enemy );   
+                    b = 0;
+                }
+                aim( a, b );
+                fire( firing_time );
+			                        
+            }
+		
+            if ( hd > dist + 2 || vd > abs(delta_z) + 2 ){
+			
+                if ( can_move ){
+                    goto_object( enemy, dist - 2, delta_z);
+                } else 
+                    if ( delta_z != nan && abs(vertical_distance( self.position, enemy.position) ) >= 1 )
+                        reach_altitude( enemy.position.z );
+			
+			
+            }
+            enemy = closest_object( enemy_category, 0.0001 );
+        }
+        if ( delta_z != nan ){
+            message("cool down");
+            cool_down( );
+        }
+	
+    }
+
+    ////////////
+    // recharge the target with a fresh cell
+    // returning the old one to the new cell location
+    
+    void grab_and_change_cell( 
+                              object target,
+                              object cell ){
+
+        object self = this.self;
+
+        point to, from, original;
+	
+        original = cell.position;
+        from = self.position;
+	
+        // first go and grab the cell
+        message("go & grab the new cell");
+        goto_object( self, cell, 2 );
+        face_object( self, cell );
+        grab();
+	
+        // then we go to the target
+        message("go to target");
+        to = homotethy( target.position, target.orientation, -2 );
+        goto_point( self, to, 2 );
+	
+	
+        // then if the target has no cell => drop it there and we are done
+        if ( target.energyCell == null ){
+		
+            message("face target and drop new cell");
+            face_point( self, to );
+            drop();
+		
+        } else {
+		
+            message("choose close free space for new cell & drop it");
+            point new_cell = space( to, 1, 5, 4 );
+            face_point( self, new_cell );
+            drop();
+		
+            message("grab target old cell");
+            face_object( self, target );
+            grab();
+		
+            message("choose close free space for old cell & drop it");
+            point old_cell = space( to, 1, 5, 4 );
+            face_point( self, old_cell );
+            drop();
+		
+            message("grab back the new cell");
+            face_point( self, new_cell );
+            grab();
+		
+            message("place new cell in target");
+            face_object( self, target );
+            drop();
+		
+            message("grab old cell");
+            face_point( self, old_cell );
+            grab();
+		
+            message("go place old cell");
+            goto_point( self, original, 2 );
+            face_point( self, original );
+            drop();
+		
+		
+        }
+	
+    }
+
+    //// the different 
+    
+}
+
+extern void object::Main(){}
